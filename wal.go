@@ -540,15 +540,27 @@ func (l *Log) findSegment(index uint64) int {
 }
 
 func (l *Log) loadSegmentEntries(s *segment) error {
+
 	file, err := NewReader(s.path, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return err
-	}
 	defer file.Close()
+
+	data := make([]byte, 0, 8192)
+	block := make([]byte, 8192)
+
+	for {
+		n, err := file.Read(block[:cap(block)])
+		data = append(data, block[:n]...)
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+				break
+			}
+			return err
+		}
+	}
 	ebuf := data
 	var epos []bpos
 	var pos int

@@ -5,7 +5,6 @@ package wal
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"syscall"
 
