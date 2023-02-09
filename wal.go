@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -19,6 +20,15 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/tinylru"
 )
+
+// File is a file interface
+type File interface {
+	io.Seeker
+	io.Reader
+	io.Writer
+	io.Closer
+	Sync() error
+}
 
 var (
 	// ErrCorrupt is returns when the log is corrupt.
@@ -102,17 +112,17 @@ type Log struct {
 	segments   []*segment  // all known log segments
 	firstIndex uint64      // index of the first entry in log
 	lastIndex  uint64      // index of the last entry in log
-	sfile      *os.File    // tail segment file handle
+	sfile      File        // tail segment file handle
 	wbatch     Batch       // reusable write batch
 	scache     tinylru.LRU // segment entries cache
 }
 
 // segment represents a single segment file.
 type segment struct {
-	path  string // path of segment file
-	index uint64 // first index of segment
-	ebuf  []byte // cached entries buffer
-	epos  []bpos // cached entries positions in buffer
+	path  string
+	ebuf  []byte
+	epos  []bpos
+	index uint64
 }
 
 type bpos struct {
@@ -172,7 +182,7 @@ func (l *Log) pushCache(segIdx int) {
 }
 
 // load all the segments. This operation also cleans up any START/END segments.
-func (l *Log) load() error {
+func (l *Log) load() (err error) {
 	fis, err := ioutil.ReadDir(l.path)
 	if err != nil {
 		return err
@@ -210,7 +220,7 @@ func (l *Log) load() error {
 		})
 		l.firstIndex = 1
 		l.lastIndex = 0
-		l.sfile, err = os.OpenFile(l.segments[0].path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
+		l.sfile, err = NewWriter(l.segments[0].path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
 		return err
 	}
 	// Open existing log. Clean up log if START of END segments exists.
@@ -262,7 +272,7 @@ func (l *Log) load() error {
 	l.firstIndex = l.segments[0].index
 	// Open the last segment for appending
 	lseg := l.segments[len(l.segments)-1]
-	l.sfile, err = os.OpenFile(lseg.path, os.O_WRONLY, l.opts.FilePerms)
+	l.sfile, err = NewWriter(lseg.path, os.O_WRONLY, l.opts.FilePerms)
 	if err != nil {
 		return err
 	}
@@ -343,7 +353,7 @@ func (l *Log) cycle() error {
 		path:  filepath.Join(l.path, segmentName(l.lastIndex+1)),
 	}
 	var err error
-	l.sfile, err = os.OpenFile(s.path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
+	l.sfile, err = NewWriter(s.path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
 	if err != nil {
 		return err
 	}
@@ -530,10 +540,15 @@ func (l *Log) findSegment(index uint64) int {
 }
 
 func (l *Log) loadSegmentEntries(s *segment) error {
-	data, err := ioutil.ReadFile(s.path)
+	file, err := NewReader(s.path, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
 	ebuf := data
 	var epos []bpos
 	var pos int
@@ -729,7 +744,7 @@ func (l *Log) truncateFront(index uint64) (err error) {
 	// Create a temp file contains the truncated segment.
 	tempName := filepath.Join(l.path, "TEMP")
 	err = func() error {
-		f, err := os.OpenFile(tempName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
+		f, err := NewWriter(tempName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
 		if err != nil {
 			return err
 		}
@@ -737,10 +752,7 @@ func (l *Log) truncateFront(index uint64) (err error) {
 		if _, err := f.Write(ebuf); err != nil {
 			return err
 		}
-		if err := f.Sync(); err != nil {
-			return err
-		}
-		return f.Close()
+		return f.Sync()
 	}()
 	// Rename the TEMP file to it's START file name.
 	startName := filepath.Join(l.path, segmentName(index)+".START")
@@ -779,7 +791,7 @@ func (l *Log) truncateFront(index uint64) (err error) {
 	s.index = index
 	if segIdx == len(l.segments)-1 {
 		// Reopen the tail segment file
-		if l.sfile, err = os.OpenFile(newName, os.O_WRONLY, l.opts.FilePerms); err != nil {
+		if l.sfile, err = NewWriter(newName, os.O_WRONLY, l.opts.FilePerms); err != nil {
 			return err
 		}
 		var n int64
@@ -835,7 +847,7 @@ func (l *Log) truncateBack(index uint64) (err error) {
 	// Create a temp file contains the truncated segment.
 	tempName := filepath.Join(l.path, "TEMP")
 	err = func() error {
-		f, err := os.OpenFile(tempName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
+		f, err := NewWriter(tempName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms)
 		if err != nil {
 			return err
 		}
@@ -843,10 +855,7 @@ func (l *Log) truncateBack(index uint64) (err error) {
 		if _, err := f.Write(ebuf); err != nil {
 			return err
 		}
-		if err := f.Sync(); err != nil {
-			return err
-		}
-		return f.Close()
+		return f.Sync()
 	}()
 	// Rename the TEMP file to it's END file name.
 	endName := filepath.Join(l.path, segmentName(s.index)+".END")
@@ -881,7 +890,7 @@ func (l *Log) truncateBack(index uint64) (err error) {
 		return err
 	}
 	// Reopen the tail segment file
-	if l.sfile, err = os.OpenFile(newName, os.O_WRONLY, l.opts.FilePerms); err != nil {
+	if l.sfile, err = NewWriter(newName, os.O_WRONLY, l.opts.FilePerms); err != nil {
 		return err
 	}
 	var n int64
