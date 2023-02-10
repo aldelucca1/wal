@@ -19,10 +19,8 @@ type DirectFile struct {
 
 // Close flushes the direct io buffer and closes the underlying file
 func (d *DirectFile) Close() error {
-	if err := d.buf.Flush(); err != nil {
-		return err
-	}
-	return d.file.Close()
+	defer d.file.Close()
+	return d.buf.Flush()
 }
 
 // Read is unimplemented
