@@ -4,7 +4,9 @@
 package wal
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 
@@ -30,11 +32,11 @@ func (d *DirectFile) Read(p []byte) (n int, err error) {
 
 // Write writes to the direct io buffer
 func (d *DirectFile) Write(p []byte) (n int, err error) {
-	err := d.buf.Write(p)
+	n, err = d.buf.Write(p)
 	if err != nil {
-		fmt.Println(b, "cap =", cap(b), "len =", len(b))
+		fmt.Println(base64.StdEncoding.EncodeToString(p), "cap =", cap(p), "len =", len(p))
 	}
-	return err
+	return n, err
 }
 
 // Seek seeks the underlying file to the specified location
