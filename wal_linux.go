@@ -30,7 +30,11 @@ func (d *DirectFile) Read(p []byte) (n int, err error) {
 
 // Write writes to the direct io buffer
 func (d *DirectFile) Write(p []byte) (n int, err error) {
-	return d.buf.Write(p)
+	err := d.buf.Write(p)
+	if err != nil {
+		fmt.Println(b, "cap =", cap(b), "len =", len(b))
+	}
+	return err
 }
 
 // Seek seeks the underlying file to the specified location
