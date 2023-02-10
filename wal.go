@@ -67,6 +67,10 @@ const (
 	JSON LogFormat = 1
 )
 
+const (
+	blockSize = 4096
+)
+
 // Options for Log
 type Options struct {
 	// NoSync disables fsync after writes. This is less durable and puts the
@@ -547,12 +551,15 @@ func (l *Log) loadSegmentEntries(s *segment) error {
 	}
 	defer file.Close()
 
-	data := make([]byte, 0, 8192)
-	block := make([]byte, 8192)
-
+	data := make([]byte, 0, 2*blockSize)
 	for {
-		n, err := file.Read(block[:cap(block)])
-		data = append(data, block[:n]...)
+		if len(data) == cap(data) {
+			s := make([]byte, len(data), cap(data)+blockSize)
+			copy(s, data)
+			data = s
+		}
+		n, err := file.Read(data[len(data):cap(data)])
+		data = data[:len(data)+n]
 		if err != nil {
 			if err == io.EOF {
 				err = nil
