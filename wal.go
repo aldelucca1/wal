@@ -24,7 +24,6 @@ import (
 // File is a file interface
 type File interface {
 	io.Seeker
-	io.Reader
 	io.Writer
 	io.Closer
 	Sync() error
@@ -544,26 +543,9 @@ func (l *Log) findSegment(index uint64) int {
 }
 
 func (l *Log) loadSegmentEntries(s *segment) error {
-
-	file, err := NewReader(s.path, os.O_RDONLY, 0)
+	data, err := ReadFile(s.path)
 	if err != nil {
 		return err
-	}
-	defer file.Close()
-
-	data := make([]byte, 0, 8192)
-	block := make([]byte, 8192)
-
-	for {
-		n, err := file.Read(block[:cap(block)])
-		data = append(data, block[:n]...)
-		if err != nil {
-			if err == io.EOF {
-				err = nil
-				break
-			}
-			return err
-		}
 	}
 	ebuf := data
 	var epos []bpos
@@ -939,4 +921,23 @@ func (l *Log) Sync() error {
 		return ErrClosed
 	}
 	return l.sfile.Sync()
+}
+
+// allocateBlock returns an aligned block for direct io
+func allocateBlock() []byte {
+	block := make([]byte, BLOCK_SIZE+ALIGN_SIZE)
+	if ALIGN_SIZE == 0 {
+		return block
+	}
+	var offset int
+	alg := alignment(block, ALIGN_SIZE)
+	if alg != 0 {
+		offset = ALIGN_SIZE - alg
+	}
+	return block[offset : offset+BLOCK_SIZE]
+}
+
+// alignment determines the alignment offset
+func alignment(block []byte, alignment int) int {
+	return int(uintptr(unsafe.Pointer(&block[0])) & uintptr(alignment-1))
 }
